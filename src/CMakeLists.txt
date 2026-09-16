@@ -15,3 +15,9 @@ add_library(raftdst_sim STATIC
 target_link_libraries(raftdst_sim
   PUBLIC raftdst_common
   PRIVATE raftdst_warnings)
+
+add_library(raftdst_raft STATIC
+  raft/codec.cc)
+target_link_libraries(raftdst_raft
+  PUBLIC raftdst_common
+  PRIVATE raftdst_warnings)

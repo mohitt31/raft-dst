@@ -178,7 +178,7 @@ The simulator and each real node are single-threaded, so false sharing
 cannot occur. Nothing is padded to cache-line size; layout is about density
 and avoiding indirection.
 
-## 8. Message ownership [decided]
+## 8. Message ownership [decided; views built]
 
 Outgoing AppendEntries carry a non-owning slice into the log that is valid
 only until the next mutating call on Core. The host encodes it to bytes in
@@ -189,6 +189,45 @@ into its arena only when it appends them.
 The simulator carries encoded bytes, not structs. That costs throughput, but
 the codec then runs under every chaos run and the TCP path uses exactly the
 same bytes. Simulator benchmark numbers include codec cost.
+
+## 8a. Message and wire format [built]
+
+**One flat `Message` struct tagged by `MsgType`**, fields unused by a type
+left zero (the etcd `raftpb.Message` shape). Rejected: `std::variant` of four
+structs. Core's handling is a switch on type either way; the flat struct
+keeps the outbox a plain reused vector and lets tests build any message by
+setting fields. The candidate/leader id is not a field: it is `from`.
+
+**Entries are a struct of arrays on the wire too:** `u32 count`, then
+`count` fixed 12-byte `(u64 term, u32 len)` records, then all payloads back
+to back. `term(i)` on a decoded frame is O(1) with no copy, and encoding from
+an `EntryLog` slice writes the payloads with one bulk copy. `EntriesView`
+hides whether entries come from a log slice or from frame bytes; the
+round-trip test is a differential test of those two backings.
+
+**The decoder is the trust boundary.** It rejects anything a correct node
+cannot send: node ids outside the cluster, `from == to`, term 0, a log
+position with index 0 xor term 0, a position or entry term above the
+message term, decreasing entry terms, index overflow, booleans other than
+0/1, hints on a successful response, missing hints on a rejection, trailing
+bytes. Core can then rely on those facts instead of re-checking them, and a
+corrupted frame can never reach the `EntryLog` term assertion.
+
+Strictness has a checkable consequence: every accepted frame has exactly
+one encoding. Two property tests assert `encode(decode(bytes)) == bytes`, on
+structured random frames (about a tenth pass validation, which the test
+requires so it cannot pass vacuously) and on bit-flipped valid frames. A
+mutant decoder that reads any non-zero byte as `true` fails both, plus the
+hand-written case.
+
+No checksum in the frame. TCP's checksum is weak, but the cut list rules
+out designing for a hostile or corrupting network, and the simulator does
+not inject corruption. The WAL does carry CRC-32C, because torn writes are
+in scope.
+
+Frames are length-prefixed so the same bytes work as simulator datagrams and
+on a TCP stream; `probe_frame` finds frame boundaries and rejects length
+prefixes above 16 MiB before any allocation.
 
 ## 9. Simulator event queue [built]
 

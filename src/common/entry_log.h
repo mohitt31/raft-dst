@@ -28,6 +28,8 @@ class LogSlice {
   [[nodiscard]] Term term(uint64_t i) const;
   [[nodiscard]] std::span<const uint8_t> payload(uint64_t i) const;
   [[nodiscard]] size_t payload_bytes() const;
+  // Every payload in the slice as one contiguous span.
+  [[nodiscard]] std::span<const uint8_t> payload_blob() const;
 
  private:
   friend class EntryLog;
@@ -131,6 +133,14 @@ inline size_t LogSlice::payload_bytes() const {
   if (count_ == 0) return 0;
   check_valid();
   return log_->ends_[first_.get() + count_ - 1] - log_->ends_[first_.get() - 1];
+}
+
+inline std::span<const uint8_t> LogSlice::payload_blob() const {
+  if (count_ == 0) return {};
+  check_valid();
+  const uint32_t b = log_->ends_[first_.get() - 1];
+  const uint32_t e = log_->ends_[first_.get() + count_ - 1];
+  return {log_->arena_.data() + b, e - b};
 }
 
 }  // namespace raftdst

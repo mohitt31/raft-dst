@@ -28,6 +28,7 @@ raftdst_test(unit_bytes SOURCES unit/bytes_test.cc LIBS raftdst_common)
 raftdst_test(unit_entry_log SOURCES unit/entry_log_test.cc LIBS raftdst_common)
 raftdst_test(unit_event_queue SOURCES unit/event_queue_test.cc LIBS raftdst_sim)
 raftdst_test(unit_sim_storage SOURCES unit/sim_storage_test.cc LIBS raftdst_sim)
+raftdst_test(unit_codec SOURCES unit/codec_test.cc LIBS raftdst_raft)
 raftdst_test(sim_world SOURCES sim/world_test.cc LIBS raftdst_sim)
 raftdst_test(sim_determinism SOURCES sim/determinism_test.cc LIBS raftdst_sim)
 
