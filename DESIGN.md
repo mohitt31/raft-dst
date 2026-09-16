@@ -40,7 +40,7 @@ costs 1.8 M events per simulated cluster-hour even when the cluster is idle,
 which directly caps simulated hours per wall minute. With deadlines an idle
 cluster costs roughly one heartbeat per interval.
 
-## 3. Determinism rules [built: lint; decided: rest]
+## 3. Determinism rules [built: lint, generators; decided: rest]
 
 Same seed must give byte-identical traces, and the target is identical
 traces on macOS/libc++ and Linux/libstdc++ too. Hazards and how each is
@@ -67,6 +67,41 @@ the one seed. The reason for splitting: the reducer switches fault classes
 off one at a time. With a single shared stream, disabling crashes would
 shift every later network draw and the failure would disappear for
 unrelated reasons.
+
+### 3a. Generators [built]
+
+xoshiro256** seeded through SplitMix64. Bounded draws use Lemire's
+multiply-and-reject method, written over a word type so the rejection rule is
+tested exhaustively on 8-bit words (every bound, every first draw: accepted
+outputs are exactly uniform). I checked that test by disabling rejection; it
+fails. Probabilities are `chance_ppm(uint32_t)`, no floating point.
+
+Tests check SplitMix64 against its published seed-1234567 sequence and compare
+10,000 outputs of xoshiro against a line-by-line transcription of the
+reference C code. A separate frozen-stream test pins the first outputs of
+`Rng{42}` and `Rng::derive(42, 3)`. Those values were captured from the
+implementation, so they prove stability, not correctness: every committed
+regression seed depends on the streams never changing.
+
+### 3b. Trace hash: FNV-1a 64 [built]
+
+Chosen for a fixed public definition and published vectors, not speed.
+Integers are absorbed as little-endian bytes. It hashes one byte at a time;
+if trace hashing shows up in a simulator profile, it gets replaced by a
+word-at-a-time hash and the swap is recorded here with the measurement.
+
+### 3c. Byte encoding and CRC [built]
+
+`ByteWriter`/`ByteReader` encode little-endian explicitly; no struct is ever
+memcpy'd to the wire or disk. The reader has a sticky error flag: reads past
+the end return zero or an empty span and set `ok() == false`, so a decoder
+reads a whole record and checks once. A property test decodes every truncated
+prefix of random encodings into exactly-sized buffers under ASan.
+
+CRC-32C is table-driven software, checked against the standard check value
+and the RFC 3720 vectors, and shown to catch every single-bit flip in a
+64-byte record. Hardware CRC is on the out-of-scope list; the fsync behind
+each WAL write costs far more than the checksum.
 
 ## 4. Strong types for Term, Index, NodeId, Time [built]
 

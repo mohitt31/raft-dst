@@ -14,6 +14,7 @@ function(raftdst_test name)
   cmake_parse_arguments(T "" "" "SOURCES;LIBS" ${ARGN})
   add_executable(${name} ${T_SOURCES})
   target_link_libraries(${name} PRIVATE ${T_LIBS} GTest::gtest_main raftdst_test_warnings)
+  target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   # PRE_TEST: discover when ctest runs, not at build time, so a sanitizer
   # abort shows up as a failing test instead of a broken build.
   gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST)
@@ -21,6 +22,9 @@ endfunction()
 
 raftdst_test(unit_types SOURCES unit/types_test.cc LIBS raftdst_common)
 raftdst_test(unit_check SOURCES unit/check_test.cc LIBS raftdst_common)
+raftdst_test(unit_rng SOURCES unit/rng_test.cc LIBS raftdst_common)
+raftdst_test(unit_hash_crc SOURCES unit/hash_crc_test.cc LIBS raftdst_common)
+raftdst_test(unit_bytes SOURCES unit/bytes_test.cc LIBS raftdst_common)
 
 # Determinism lint: banned APIs in code that runs inside the simulator.
 set(LINT_DIRS common env raft kv node sim)
