@@ -8,12 +8,18 @@ Status tags: **[built]** implemented and tested, **[decided]** not built yet.
 
 ---
 
-## 1. The Raft engine does no I/O [decided]
+## 1. The Raft engine does no I/O [decided; interfaces built]
 
 `raft::Core` is a pure state machine. It never reads a clock, touches a
 socket or writes a file. Inputs are `on_message`, `on_timer` and `propose`,
 each carrying `now`. Outputs collect in a `Ready` batch: hard state and log
 entries to persist, messages to send, and the newly committed range.
+
+The interfaces are in `src/env/`: `IClock` (now + one wakeup slot),
+`INetwork` (best-effort send; receive is push), `IStorage` (buffered writes,
+`sync`, `load`) and `INode` (`on_frame`, `on_wake`), all handed to a node
+through one `NodeContext`. The simulator implements them today; the real
+event loop will implement the same four.
 
 A thin `NodeHost` binds `Core` to `IClock`, `INetwork` and `IStorage`. The
 same `NodeHost` runs inside the simulator and inside `raftd`. Only the
@@ -40,7 +46,7 @@ costs 1.8 M events per simulated cluster-hour even when the cluster is idle,
 which directly caps simulated hours per wall minute. With deadlines an idle
 cluster costs roughly one heartbeat per interval.
 
-## 3. Determinism rules [built: lint, generators; decided: rest]
+## 3. Determinism rules [built]
 
 Same seed must give byte-identical traces, and the target is identical
 traces on macOS/libc++ and Linux/libstdc++ too. Hazards and how each is
@@ -54,8 +60,14 @@ handled:
 | floating point | no `float`/`double` in simulated code; probabilities are integer parts-per-million | lint |
 | wall clock, threads, `rand`, `getenv` | banned in `common env raft kv node sim` | lint (`tests/lint/banned_apis.sh`) |
 | equal-time events | queue key is `(time, insertion seq)`, which is unique | event queue tests |
-| uninitialised reads | — | same-seed-twice trace comparison |
+| uninitialised reads, pointer values, per-process state | — | same seed run twice in one process **and** in two separate processes |
 | tracing perturbs behaviour | — | trace on vs off must give the same final digest |
+
+**Why two processes.** Two runs inside one test process usually get the same
+heap layout, so a pointer value leaking into behaviour goes unnoticed. I
+checked this: with a heap address mixed into every delivery trace record, the
+in-process determinism test still passed and the two-process test
+(`sim.cross_process_determinism`) failed. Both stay.
 
 The lint has a self-test: every code line in `tests/lint/fixtures` must be
 flagged, so a broken regex fails CI instead of silently passing.
@@ -123,7 +135,7 @@ corrupt state or hide a safety violation. `RAFT_DCHECK` is for internal
 invariants; it is on in the asan, tsan and mutants presets and off in
 release, where the condition is type-checked but not evaluated.
 
-## 6. Log layout: struct of arrays, index = position [decided]
+## 6. Log layout: struct of arrays, index = position [built]
 
 ```
 terms_  : vector<Term>      terms_[0] = 0 sentinel
@@ -140,6 +152,17 @@ three `resize` calls. A send slice is a span into the arena.
 **Rejected: `vector<Entry{Term, std::string}>`** — one allocation per entry,
 a pointer chase per payload, and term scans spread across cache lines.
 **Rejected: `deque`** — payloads are not contiguous.
+
+**One container for memory and disk.** `EntryLog` (in `common/`, not `raft/`)
+is used both as Raft's in-memory log and as the durable copy inside
+`SimStorage`, so it is written and differential-tested once. Slices
+(`LogSlice`) hold the log pointer plus indices, not spans: appends may
+reallocate the arrays without invalidating a slice, while truncation bumps a
+generation counter that DCHECK builds verify on every slice access. The
+differential test runs random append / bulk append / truncate / slice
+against a `vector<pair<Term, vector<uint8_t>>>` model and compares every
+observable after every step. `ends_` is `uint32_t`, so one log's payloads are
+capped at 4 GiB (asserted); simulated runs are far below that.
 
 Index equals position only because compaction is out of scope. Log memory
 grows without bound; that is accepted by the cut list.
@@ -167,7 +190,7 @@ The simulator carries encoded bytes, not structs. That costs throughput, but
 the codec then runs under every chaos run and the TCP path uses exactly the
 same bytes. Simulator benchmark numbers include codec cost.
 
-## 9. Simulator event queue [decided]
+## 9. Simulator event queue [built]
 
 24-byte trivially copyable events `{at, seq, payload, kind, node}` in a
 binary min-heap keyed on `(at, seq)`. Payload bytes live in a pool of
@@ -177,7 +200,13 @@ generation.
 **Rejected: `std::function` callbacks** — allocation, indirect call, and
 nothing for the trace to inspect.
 
-## 10. Fault model [decided]
+Differential-tested against a linear-scan model with times drawn from a
+16-value range, so equal times are the common case. Message bytes sit in a
+slot pool with a free list; on delivery the bytes are swapped into a
+dedicated receive buffer, because the node may send while handling the
+frame and growing the pool must not move the bytes it is reading.
+
+## 10. Fault model [built]
 
 Network: drop, delay (base + jitter + rare long tail, which gives
 reordering), duplication, symmetric partitions and one-way link cuts. Nodes:
@@ -185,9 +214,45 @@ crash and restart, with unsynced writes lost, and crashes both between
 events and inside `sync()` so only a prefix of the write survives. All rates
 are integer parts-per-million.
 
+Partitions come in three shapes: one node isolated both ways, a random split
+into two non-empty groups, and one direction of one link cut. Messages are
+checked against partitions both when sent and when delivered. After
+`faults_until` no new faults start, links heal, armed in-sync crashes are
+disarmed and drops/duplicates/long delays stop; crashed nodes still restart
+on schedule. That quiet window is what the liveness check will use.
+
+Scenario tests get scripted controls (`crash_node`, `restart_node`,
+`set_link`) in addition to the random schedule.
+
 Duplication is not in the original spec list. I added it because it is
 about ten lines and exercises a real bug class: a duplicated, stale
 AppendEntries truncating entries the follower already acknowledged.
+
+## 10a. A crash inside sync() throws [built]
+
+`SimStorage::sync()` with a crash armed keeps a random prefix of the staged
+writes and throws `SimCrash`. The world catches it at the node callback
+boundary and destroys the node.
+
+**Rejected: mark the node dead and let the callback finish.** Everything the
+node does after the crash point would still happen: sends (easy to filter),
+but also applying committed entries and reporting them to the checker, which
+a process that died inside fsync can never do. An exception stops the node
+exactly where a real process stops. The cost is that node code must be
+exception-safe, which RAII gives for free, and the exception only exists in
+the simulator.
+
+Crash-legal disk states are counted in units: one per `set_hard_state`, one
+per appended entry. An append's truncation lands only together with its
+first entry, matching a WAL where the truncation point lives in the entries
+record. A property test checks the storage against an independent model:
+after a normal sync the disk equals all staged writes, after a plain crash it
+is unchanged, after a crash inside sync it equals some prefix. A mutant that
+silently drops one hard-state write during a torn sync fails that test with a
+replay seed.
+
+The world test checks from the other side: with every injected crash placed
+inside a sync, no node ever sends at the instant it died.
 
 ## 11. Proving the checker has teeth: mutants [decided]
 
