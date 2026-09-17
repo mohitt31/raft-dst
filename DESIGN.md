@@ -190,6 +190,72 @@ The simulator carries encoded bytes, not structs. That costs throughput, but
 the codec then runs under every chaos run and the TCP path uses exactly the
 same bytes. Simulator benchmark numbers include codec cost.
 
+## 7d. Key-value state machine [built]
+
+`IStateMachine` (in `env/`, so `kv` does not depend on `node`) has `valid`,
+`apply` and `digest`. `NodeHost` owns one per incarnation. KV state is
+volatile: after a restart the node replays committed entries from index 1 as
+it relearns the commit index, because snapshots are out of scope.
+
+**Store:** `unordered_map<string, string>` with heterogeneous `string_view`
+lookup, so gets and deletes build no temporary string. The hasher is our own
+FNV-1a, not `std::hash`, whose values differ between standard libraries; the
+lint bans `std::hash` for that reason. The map is never iterated, so bucket
+order cannot reach a decision or a trace.
+
+**Digest = content hash:** the XOR of a length-prefixed hash of each
+(key, value) pair, updated incrementally on put and delete. It depends on
+contents only, not on the order things were applied, so two nodes that
+applied the same commands in the same order can be compared with one integer,
+and a test asserts a rebuilt store matches a differently-ordered history.
+
+**Commands** are `put` and `delete`, length-prefixed and strictly decoded, so
+each valid command has exactly one encoding (same rule as the wire codec, and
+the same two property tests). Empty payloads are reserved for leader no-ops.
+`NodeHost::propose` validates a command before proposing, so every committed
+non-empty entry decodes.
+
+## 7e. Client workload [built]
+
+Open loop: the harness advances virtual time to the next client operation and
+proposes whether or not earlier ones finished, so a stalled cluster does not
+slow the client down (the same coordinated-omission rule the real benchmark
+will use). It aims at the node it last saw lead, otherwise at a random node,
+and follows NotLeader hints. No sessions and no retries (both cut), so a lost
+write is counted rather than repeated.
+
+A proposal is acknowledged when the entry at the returned index is committed
+**with the returned term**. A different term at that index means the write
+was lost during a leader change, which is correct behaviour without client
+sessions.
+
+Client calls enter through `World::call_node`, which wraps them in the same
+crash handling as network callbacks: a proposal can die inside `sync()` too,
+and then the node must stop there like any other crash.
+
+## 7f. Continuous state-machine comparison [built]
+
+The checker keeps a reference model: an ordered `std::map` that applies each
+committed command in index order, with the digest recomputed from scratch
+after every entry. Every node reports its own incrementally maintained digest
+after each apply, and the two must match at every index on every node. That
+makes the KV store a differential test against a model, running inside every
+chaos run rather than only in a unit test.
+
+## 7g. Commit liveness [built]
+
+`run_scenario` stops faults at a set time; the last crashed node is back by
+`faults_until + max down time`; after a settle window, proposals made from
+then on must be acknowledged before the run ends (20 of them by default), and
+every node must be up and agree on a leader. Like the election liveness check
+this is a bounded-time proxy, not a proof.
+
+One test failure here was the test's fault, not Raft's: the first version
+compared every node's applied index at the instant writes stopped, but a
+follower learns a new commit index on the next heartbeat, up to 50 ms later.
+The test now stops writing, runs one quiet second, and then requires exact
+convergence and zero pending writes.
+
 ## 8a. Message and wire format [built]
 
 **One flat `Message` struct tagged by `MsgType`**, fields unused by a type

@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
 #include "common/entry_log.h"
 #include "common/types.h"
 #include "env/node.h"
+#include "env/state_machine.h"
 #include "raft/core.h"
 
 namespace raftdst::node {
@@ -23,9 +25,19 @@ class IObserver {
   virtual void on_hard_state_synced(Time now, NodeId node, const HardState& hs) = 0;
   // The node became leader of `term` (reported after its vote was synced).
   virtual void on_became_leader(Time now, NodeId node, Term term, const EntryLog& log) = 0;
-  // Entry `index` is committed on `node` and is being applied.
+  // Entry `index` is committed on `node` and is about to be applied.
   virtual void on_commit(Time now, NodeId node, Index index, Term term,
                          std::span<const uint8_t> payload) = 0;
+  // Entry `index` was applied; `digest` is the state machine digest after it.
+  virtual void on_applied(Time now, NodeId node, Index index, uint64_t digest) = 0;
+};
+
+struct ProposeOutcome {
+  enum class Status : uint8_t { kAccepted, kNotLeader, kInvalidCommand };
+  Status status = Status::kNotLeader;
+  Index index;         // accepted: where the command was appended
+  Term term;           // accepted: the term it was appended in
+  NodeId leader_hint;  // not leader: who this node believes leads (may be none)
 };
 
 struct HostStats {
@@ -40,14 +52,19 @@ struct HostStats {
 // drain: persist, sync, send, apply, advance, re-arm the timer.
 class NodeHost final : public INode {
  public:
-  NodeHost(NodeContext& ctx, const raft::Config& config, IObserver* observer);
+  NodeHost(NodeContext& ctx, const raft::Config& config, std::unique_ptr<IStateMachine> sm,
+           IObserver* observer);
 
   void on_frame(NodeId from, std::span<const uint8_t> frame) override;
   void on_wake() override;
 
-  raft::ProposeResult propose(std::span<const uint8_t> command);
+  // The command counts as written once an entry with this index AND term is
+  // committed. A different term at that index means it was lost.
+  ProposeOutcome propose(std::span<const uint8_t> command);
 
   [[nodiscard]] const raft::Core& core() const { return core_; }
+  [[nodiscard]] const IStateMachine& state_machine() const { return *sm_; }
+  [[nodiscard]] Index applied() const { return applied_; }
   [[nodiscard]] const HostStats& stats() const { return stats_; }
 
  private:
@@ -57,9 +74,10 @@ class NodeHost final : public INode {
   NodeContext& ctx_;
   IObserver* observer_;
   raft::Core core_;
+  std::unique_ptr<IStateMachine> sm_;
   HostStats stats_;
   std::vector<uint8_t> tx_;
-  Index reported_commit_;
+  Index applied_;
   Term leader_reported_for_;
 };
 

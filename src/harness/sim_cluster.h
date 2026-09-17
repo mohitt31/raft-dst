@@ -18,6 +18,7 @@ class SimCluster {
   [[nodiscard]] sim::World& world() { return *world_; }
   [[nodiscard]] const sim::World& world() const { return *world_; }
   [[nodiscard]] Checker& checker() { return checker_; }
+  [[nodiscard]] const Checker& checker() const { return checker_; }
   [[nodiscard]] uint8_t size() const { return world_->config().nodes; }
 
   // nullptr while the node is down.

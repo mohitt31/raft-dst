@@ -2,11 +2,13 @@
 
 #include <string>
 
+#include "kv/kv_store.h"
+
 namespace raftdst::harness {
 
 SimCluster::SimCluster(const sim::SimConfig& sim, const raft::Config& raft) : raft_(raft) {
   world_ = std::make_unique<sim::World>(sim, [this](NodeContext& ctx) -> std::unique_ptr<INode> {
-    return std::make_unique<node::NodeHost>(ctx, raft_, &checker_);
+    return std::make_unique<node::NodeHost>(ctx, raft_, std::make_unique<kv::KvStore>(), &checker_);
   });
 }
 

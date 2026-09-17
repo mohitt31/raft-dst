@@ -32,6 +32,8 @@ raftdst_test(unit_codec SOURCES unit/codec_test.cc LIBS raftdst_raft)
 raftdst_test(unit_core SOURCES unit/core_test.cc LIBS raftdst_raft)
 raftdst_test(unit_checker SOURCES unit/checker_test.cc LIBS raftdst_harness)
 raftdst_test(sim_election SOURCES sim/election_test.cc LIBS raftdst_harness)
+raftdst_test(unit_kv SOURCES unit/kv_test.cc LIBS raftdst_kv)
+raftdst_test(sim_replication SOURCES sim/replication_test.cc LIBS raftdst_harness)
 raftdst_test(sim_world SOURCES sim/world_test.cc LIBS raftdst_sim)
 raftdst_test(sim_determinism SOURCES sim/determinism_test.cc LIBS raftdst_sim)
 

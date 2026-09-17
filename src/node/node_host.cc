@@ -10,10 +10,13 @@ Recovered NodeHost::load(NodeContext& ctx, IObserver* observer) {
   return r;
 }
 
-NodeHost::NodeHost(NodeContext& ctx, const raft::Config& config, IObserver* observer)
+NodeHost::NodeHost(NodeContext& ctx, const raft::Config& config, std::unique_ptr<IStateMachine> sm,
+                   IObserver* observer)
     : ctx_(ctx),
       observer_(observer),
-      core_(ctx.self, ctx.cluster_size, config, load(ctx, observer), ctx.seed, ctx.clock.now()) {
+      core_(ctx.self, ctx.cluster_size, config, load(ctx, observer), ctx.seed, ctx.clock.now()),
+      sm_(std::move(sm)) {
+  RAFT_ASSERT(sm_ != nullptr, "NodeHost needs a state machine");
   ctx_.clock.wake_at(core_.next_deadline());
 }
 
@@ -36,11 +39,16 @@ void NodeHost::on_wake() {
   drain();
 }
 
-raft::ProposeResult NodeHost::propose(std::span<const uint8_t> command) {
-  RAFT_ASSERT(!command.empty(), "empty commands are reserved for leader no-ops");
-  raft::ProposeResult r = core_.propose(ctx_.clock.now(), command);
+ProposeOutcome NodeHost::propose(std::span<const uint8_t> command) {
+  if (command.empty() || !sm_->valid(command)) {
+    return {ProposeOutcome::Status::kInvalidCommand, Index{}, Term{}, NodeId::none()};
+  }
+  const raft::ProposeResult r = core_.propose(ctx_.clock.now(), command);
+  // Drain before returning: the entry is durable on this node (and on its way
+  // to followers) by the time the caller learns its index.
   drain();
-  return r;
+  if (!r.accepted) return {ProposeOutcome::Status::kNotLeader, Index{}, Term{}, r.leader_hint};
+  return {ProposeOutcome::Status::kAccepted, r.index, r.term, NodeId::none()};
 }
 
 void NodeHost::drain() {
@@ -72,14 +80,16 @@ void NodeHost::drain() {
   }
   stats_.messages_sent += r.messages.size();
 
-  // 4. Apply. The key-value state machine hooks in here.
-  for (Index i = reported_commit_.next(); i <= r.commit; i = i.next()) {
+  // 4. Apply.
+  for (Index i = applied_.next(); i <= r.commit; i = i.next()) {
+    const auto payload = core_.log().payload_at(i);
     if (observer_) {
-      observer_->on_commit(ctx_.clock.now(), ctx_.self, i, core_.log().term_at(i),
-                           core_.log().payload_at(i));
+      observer_->on_commit(ctx_.clock.now(), ctx_.self, i, core_.log().term_at(i), payload);
     }
+    sm_->apply(i, payload);
+    applied_ = i;
+    if (observer_) observer_->on_applied(ctx_.clock.now(), ctx_.self, i, sm_->digest());
   }
-  if (r.commit > reported_commit_) reported_commit_ = r.commit;
 
   // 5.
   core_.advance();

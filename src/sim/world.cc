@@ -349,6 +349,14 @@ void World::on_faults_end() {
   trace_.record(now_, TraceKind::kFaultsEnd, 0);
 }
 
+bool World::call_node(NodeId id, uint64_t tag, const std::function<void(INode&)>& f) {
+  Slot& s = *slots_[id.get()];
+  if (!s.up || !s.proc) return false;
+  trace_.record(now_, TraceKind::kUser, s.id, tag);
+  invoke(s, [&] { f(*s.proc); });
+  return true;
+}
+
 // ---------------------------------------------------------- scripted faults
 
 bool World::is_up(NodeId id) const { return slots_[id.get()]->up; }

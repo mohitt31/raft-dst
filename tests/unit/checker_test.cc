@@ -2,7 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
 #include <vector>
+
+#include "kv/command.h"
+#include "kv/kv_store.h"
 
 namespace raftdst::harness {
 namespace {
@@ -10,7 +14,20 @@ namespace {
 const Time t0 = Time::zero();
 const NodeId n0{0}, n1{1}, n2{2};
 
-std::vector<uint8_t> p(uint8_t b) { return {b}; }
+// A valid KV command, distinct per b.
+std::vector<uint8_t> p(uint8_t b) {
+  std::vector<uint8_t> out;
+  const std::string value(1, static_cast<char>('a' + b % 26));
+  kv::encode_command({kv::Op::kPut, "k" + std::to_string(b), value}, out);
+  return out;
+}
+
+uint64_t digest_after_puts(std::initializer_list<uint8_t> bs) {
+  uint64_t d = 0;
+  for (uint8_t b : bs)
+    d ^= kv::pair_hash("k" + std::to_string(b), std::string(1, static_cast<char>('a' + b % 26)));
+  return d;
+}
 
 EntryLog log_of(std::initializer_list<std::pair<uint64_t, uint8_t>> entries) {
   EntryLog l;
@@ -91,6 +108,38 @@ TEST(Checker, LeaderMissingACommittedEntry) {
   c.on_became_leader(t0, n2, Term{3}, log_of({{1, 1}, {1, 9}}));  // wrong payload
   ASSERT_EQ(c.violations().size(), 2u);
   EXPECT_NE(c.violations()[0].find("missing committed entry 2"), std::string::npos);
+}
+
+TEST(Checker, AppliedStateMustMatchReferenceModel) {
+  Checker c;
+  c.on_commit(t0, n0, Index{1}, Term{1}, p(1));
+  c.on_commit(t0, n0, Index{2}, Term{1}, {});  // no-op
+  c.on_commit(t0, n0, Index{3}, Term{1}, p(2));
+  c.on_applied(t0, n0, Index{1}, digest_after_puts({1}));
+  c.on_applied(t0, n0, Index{2}, digest_after_puts({1}));
+  c.on_applied(t0, n0, Index{3}, digest_after_puts({1, 2}));
+  EXPECT_TRUE(c.ok()) << c.violations().front();
+
+  c.on_applied(t0, n1, Index{3}, digest_after_puts({2}));  // lost the first put
+  c.on_applied(t0, n2, Index{4}, 0);                       // applied past commit
+  ASSERT_EQ(c.violations().size(), 2u);
+  EXPECT_NE(c.violations()[0].find("differs from the reference model"), std::string::npos);
+  EXPECT_NE(c.violations()[1].find("before it was committed"), std::string::npos);
+}
+
+TEST(Checker, DeleteAndOverwriteInModel) {
+  Checker c;
+  std::vector<uint8_t> put_a, put_b, del;
+  kv::encode_command({kv::Op::kPut, "x", "1"}, put_a);
+  kv::encode_command({kv::Op::kPut, "x", "2"}, put_b);
+  kv::encode_command({kv::Op::kDel, "x", ""}, del);
+  c.on_commit(t0, n0, Index{1}, Term{1}, put_a);
+  c.on_commit(t0, n0, Index{2}, Term{1}, put_b);
+  c.on_commit(t0, n0, Index{3}, Term{1}, del);
+  c.on_applied(t0, n0, Index{1}, kv::pair_hash("x", "1"));
+  c.on_applied(t0, n0, Index{2}, kv::pair_hash("x", "2"));
+  c.on_applied(t0, n0, Index{3}, 0);
+  EXPECT_TRUE(c.ok()) << c.violations().front();
 }
 
 }  // namespace

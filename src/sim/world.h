@@ -73,6 +73,12 @@ class World {
   [[nodiscard]] const SimStorage& storage(NodeId id) const;
   [[nodiscard]] uint32_t incarnation(NodeId id) const;
 
+  // Runs `f` on node `id` as if it were an event: a crash inside it (for
+  // example a sync with an armed crash) stops `f` and kills the node, exactly
+  // as for network callbacks. Records a trace entry tagged `tag`. Returns
+  // false, without calling `f`, if the node is down.
+  bool call_node(NodeId id, uint64_t tag, const std::function<void(INode&)>& f);
+
   // Scripted faults for scenario tests. Do not mix with random partitions:
   // a random heal clears every link.
   void crash_node(NodeId id);    // stays down until restart_node

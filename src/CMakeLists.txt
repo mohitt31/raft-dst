@@ -29,9 +29,18 @@ target_link_libraries(raftdst_node
   PUBLIC raftdst_raft
   PRIVATE raftdst_warnings)
 
+add_library(raftdst_kv STATIC
+  kv/command.cc
+  kv/kv_store.cc)
+target_link_libraries(raftdst_kv
+  PUBLIC raftdst_common
+  PRIVATE raftdst_warnings)
+
 add_library(raftdst_harness STATIC
   harness/checker.cc
-  harness/sim_cluster.cc)
+  harness/scenario.cc
+  harness/sim_cluster.cc
+  harness/workload.cc)
 target_link_libraries(raftdst_harness
-  PUBLIC raftdst_node raftdst_sim
+  PUBLIC raftdst_node raftdst_sim raftdst_kv
   PRIVATE raftdst_warnings)
