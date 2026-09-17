@@ -17,7 +17,21 @@ target_link_libraries(raftdst_sim
   PRIVATE raftdst_warnings)
 
 add_library(raftdst_raft STATIC
-  raft/codec.cc)
+  raft/codec.cc
+  raft/core.cc)
 target_link_libraries(raftdst_raft
   PUBLIC raftdst_common
+  PRIVATE raftdst_warnings)
+
+add_library(raftdst_node STATIC
+  node/node_host.cc)
+target_link_libraries(raftdst_node
+  PUBLIC raftdst_raft
+  PRIVATE raftdst_warnings)
+
+add_library(raftdst_harness STATIC
+  harness/checker.cc
+  harness/sim_cluster.cc)
+target_link_libraries(raftdst_harness
+  PUBLIC raftdst_node raftdst_sim
   PRIVATE raftdst_warnings)

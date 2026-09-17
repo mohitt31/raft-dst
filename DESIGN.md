@@ -8,7 +8,7 @@ Status tags: **[built]** implemented and tested, **[decided]** not built yet.
 
 ---
 
-## 1. The Raft engine does no I/O [decided; interfaces built]
+## 1. The Raft engine does no I/O [built]
 
 `raft::Core` is a pure state machine. It never reads a clock, touches a
 socket or writes a file. Inputs are `on_message`, `on_timer` and `propose`,
@@ -37,7 +37,7 @@ vote grant or AppendEntries ack can never leave before the state it depends
 on is durable. The simulator can crash a node inside `sync()`, so breaking
 this order is something the checker can observe, not just a code comment.
 
-## 2. Timers are deadlines, not ticks [decided]
+## 2. Timers are deadlines, not ticks [built]
 
 Core exposes `next_deadline()`; the host arms one wakeup per node.
 
@@ -167,7 +167,7 @@ capped at 4 GiB (asserted); simulated runs are far below that.
 Index equals position only because compaction is out of scope. Log memory
 grows without bound; that is accepted by the cut list.
 
-## 7. Leader state in fixed arrays [decided]
+## 7. Leader state in fixed arrays [built]
 
 `std::array<Progress, kMaxNodes>` with `{next, match, last_sent, mode}`, and
 votes as a bitmask. Commit index: insertion-sort at most five match indices
@@ -266,6 +266,99 @@ Scenario tests get scripted controls (`crash_node`, `restart_node`,
 Duplication is not in the original spec list. I added it because it is
 about ten lines and exercises a real bug class: a duplicated, stale
 AppendEntries truncating entries the follower already acknowledged.
+
+## 7a. Core behaviour choices [built]
+
+**Assert on our own state, never on input.** `RAFT_ASSERT` in the Core
+guards the Core's own invariants (checked after every input in DCHECK
+builds: commit within the log, leader log ends in its own term, every peer's
+`match < next <= last + 1`, and so on). Input that a correct peer could never
+send, like an AppendEntries from another leader of our own term or a request
+to truncate a committed entry, is ignored and counted in `CoreStats`. A buggy
+peer (the mutants build plants exactly those) must not abort the process that
+is observing it: one abort would end a whole fuzz sweep, and the global
+checker, which sees every node, reports the violation with its seed instead.
+
+**Election timer resets** only as the paper says: on an AppendEntries from
+the current leader, on granting a vote, and when starting an election. A
+leader or candidate stepping down starts a fresh timer because it had none.
+Stepping down to a higher term *without* granting a vote does not reset a
+follower's timer, so a node with a stale log that keeps calling elections
+cannot hold back the up-to-date nodes that could win.
+
+**No-op on election.** A new leader appends an empty entry in its own term
+(thesis section 6.4). Entries from earlier terms can then commit without
+waiting for a client write, which matters for failover time. Empty payloads
+are reserved for this; `NodeHost::propose` rejects empty commands.
+
+**Commit rule.** Insertion-sort at most five match indices, take the quorum
+element, and commit only if that entry is from the current term (Figure 8).
+Scenario test: an earlier-term entry replicated to a majority stays
+uncommitted until a current-term entry reaches a majority.
+
+**Follower truncation** happens only at the first index whose term differs.
+A late, shorter AppendEntries whose entries are all present never removes
+the newer entries behind them; this has its own scenario test. A follower's
+commit moves to `min(leader_commit, prev_index + entries)`, never to its own
+last index, and never backwards.
+
+**Flow control: probe and replicate per peer (etcd's model).** A new leader
+probes every peer: one AppendEntries, then wait for a response or the next
+heartbeat. A success moves the peer to replicate mode, where sends are
+pipelined and `next` advances optimistically. New entries go to replicating
+peers when the host collects `Ready`, not inside `propose`, so N proposals
+in one step share one AppendEntries per peer and one fsync. A rejection
+moves back to probe, using the follower's conflict hint to skip a whole
+term. If a heartbeat interval passes with no progress while optimistic sends
+are outstanding, they are assumed lost and the peer drops back to probing
+from `match + 1`. My first test for this expected the fallback at the first
+heartbeat; tracing it showed an ack had arrived inside that interval, so the
+code was following the rule and the test was wrong. The test now pins
+exactly one quiet interval.
+
+## 7b. NodeHost [built]
+
+`NodeHost` is the only glue between Core and the environment, shared by the
+simulator and `raftd`. Each input is one step and one drain: write hard
+state, then log entries, sync, send, apply, `advance()`, re-arm the timer.
+Hard state is written before entries in the same sync so a torn write can
+never keep entries from a term whose term bump was lost (the Core asserts on
+load that no log entry is above the persisted term).
+
+Decoding happens here, and a frame whose header `from`/`to` disagree with
+the transport is dropped. The `IObserver` hooks report only facts that are
+already durable: recovered state, hard state after sync, leadership after
+the vote is synced, and commits as they are applied.
+
+## 7c. Safety checker [built]
+
+`harness::Checker` observes every node and checks, on every report rather
+than at the end of a run: at most one leader per term; a node's durable vote
+never changes or disappears within a term, including across restarts; a
+node's durable term never decreases; every node commits the same (term,
+payload) at each index; a new leader's log holds every committed entry.
+Violations are recorded with time and node, never asserted.
+`SimCluster::check_node_stats` adds the Core's refused-input counters and
+the host's undecodable or misrouted frame counts, which must all be zero.
+
+**The checker had a bug of its own.** On a restart into a newer term with no
+vote, it kept the vote recorded for the older term, so a legitimate vote
+later in the new term would have been reported as a changed vote. I found it
+reading the code before any test hit it. `RestartIntoNewTermWithoutVote...`
+is its regression test.
+
+**Planted bugs it catches** (manual check before the mutants preset exists):
+granting a vote regardless of an earlier vote in the same term is reported
+on seed 1 as "vote in term 26 changed from n2 to n0", before a second leader
+is even elected; persisting term but not the vote is reported on seed 1 as
+"vote in term 1 changed from n1 to none (on restart)".
+
+**Liveness, for elections.** The chaos property test stops faults at 30 s;
+the last crashed node is back by 33 s (maximum down time); the cluster then
+gets 15 s, 50 maximum election timeouts, and must end with every node up,
+in one term, naming one leader. 40 seeds on 3- and 5-node clusters. This is
+a bounded-time check, not a proof: a long enough run of split votes would
+fail it, and then the seed gets investigated.
 
 ## 10a. A crash inside sync() throws [built]
 

@@ -29,11 +29,14 @@ raftdst_test(unit_entry_log SOURCES unit/entry_log_test.cc LIBS raftdst_common)
 raftdst_test(unit_event_queue SOURCES unit/event_queue_test.cc LIBS raftdst_sim)
 raftdst_test(unit_sim_storage SOURCES unit/sim_storage_test.cc LIBS raftdst_sim)
 raftdst_test(unit_codec SOURCES unit/codec_test.cc LIBS raftdst_raft)
+raftdst_test(unit_core SOURCES unit/core_test.cc LIBS raftdst_raft)
+raftdst_test(unit_checker SOURCES unit/checker_test.cc LIBS raftdst_harness)
+raftdst_test(sim_election SOURCES sim/election_test.cc LIBS raftdst_harness)
 raftdst_test(sim_world SOURCES sim/world_test.cc LIBS raftdst_sim)
 raftdst_test(sim_determinism SOURCES sim/determinism_test.cc LIBS raftdst_sim)
 
 # Determinism lint: banned APIs in code that runs inside the simulator.
-set(LINT_DIRS common env raft kv node sim)
+set(LINT_DIRS common env raft kv node sim harness)
 list(TRANSFORM LINT_DIRS PREPEND ${PROJECT_SOURCE_DIR}/src/)
 add_test(NAME lint.banned_apis
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/lint/banned_apis.sh ${LINT_DIRS})
