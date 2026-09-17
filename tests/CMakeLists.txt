@@ -34,6 +34,13 @@ raftdst_test(unit_checker SOURCES unit/checker_test.cc LIBS raftdst_harness)
 raftdst_test(sim_election SOURCES sim/election_test.cc LIBS raftdst_harness)
 raftdst_test(unit_kv SOURCES unit/kv_test.cc LIBS raftdst_kv)
 raftdst_test(sim_replication SOURCES sim/replication_test.cc LIBS raftdst_harness)
+raftdst_test(sim_regression SOURCES sim/regression_test.cc LIBS raftdst_harness)
+target_compile_definitions(sim_regression PRIVATE
+  RAFTDST_REGRESSIONS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/regressions")
+
+if(RAFTDST_MUTANTS)
+  raftdst_test(sim_mutants SOURCES sim/mutants_test.cc LIBS raftdst_harness)
+endif()
 raftdst_test(sim_world SOURCES sim/world_test.cc LIBS raftdst_sim)
 raftdst_test(sim_determinism SOURCES sim/determinism_test.cc LIBS raftdst_sim)
 

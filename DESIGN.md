@@ -452,13 +452,63 @@ replay seed.
 The world test checks from the other side: with every injected crash placed
 inside a sync, no node ever sends at the instant it died.
 
-## 11. Proving the checker has teeth: mutants [decided]
+## 11. Fuzzer, reducer and mutants [built]
 
-The `mutants` preset compiles switches that plant known Raft bugs: committing
-entries from an older term by counting replicas, skipping the vote persist,
-skipping the up-to-date log check on votes, truncating on stale
-AppendEntries. A test requires the fuzzer to catch each within a fixed seed
-budget. The switches do not exist in the release engine.
+**Each seed draws its own configuration (swarm testing).** `FuzzCase`
+randomises node count, batch size, election and heartbeat timing, network
+delay bounds, every fault rate, client rate and key count, then prints them
+as one parseable line. Fixing the configuration across seeds hides bugs: with
+batches of up to 256 entries a new leader's no-op almost always travels with
+the entries before it, which is exactly the gap the paper's Figure 8 case
+needs.
+
+**Reducer.** Changing any knob changes the whole execution, so a candidate is
+kept only if it still fails *the same way*. The signature is the violation
+text with digits stripped, which drops times, node ids and indices but keeps
+the wording. It shrinks the run length, then node count, then whole fault
+classes, then rates, then the key space.
+
+**Regression corpus.** `tests/regressions/*.repro` holds reduced cases, one
+per line; a CTest case replays all of them. It is empty so far: the fuzzer
+has not found a defect in the engine yet (campaign counts in NUMBERS.md).
+
+**Mutants: measuring whether the checker has teeth.** The `mutants` preset
+compiles six planted bugs, guarded so that in every other build
+`Core::mutation_on` is a compile-time false and the branches vanish. The
+release binary contains none of their strings, which is checked directly with
+`strings`.
+
+The measured result (NUMBERS.md has the commands):
+
+| Planted bug | Found by fuzzing |
+|---|---|
+| vote without the up-to-date log check | seed 1 |
+| a second vote in one term | seed 2 |
+| truncate at prev_index without a conflict | seed 1 |
+| persist the term but not the vote | seed 1 |
+| commit earlier-term entries by counting (Figure 8) | no |
+| follower commit not capped at what a message verified | no |
+
+The last two are the interesting result, and the reason this preset exists.
+Both are real safety bugs, and random search does not reach them: the first
+needs a majority to hold an old-term entry while the new leader's no-op is
+missing from it, and the second needs a follower with a stale divergent tail
+to receive an append that matches further back than the leader's commit
+index. Each is caught instead by a targeted scenario driven directly against
+the Core, and the mutants test requires every planted bug to be caught by
+fuzzing **or** by its scenario, so an escape fails the build. When I first ran
+it, `follower-commit-unbounded` escaped both and the test failed, which is how
+the missing scenario was found.
+
+Two side findings:
+
+* With internal DCHECKs on, the double-vote mutant aborts inside the Core's
+  own invariant (`candidate did not vote for itself`) before the checker can
+  report. That is defence in depth working, but it stops a sweep, so the
+  mutants preset runs with DCHECKs off and measures the external checker.
+* The determinism lint flagged the string literal `"double-vote"` as the
+  banned type `double`. It matches inside string literals, which is blunt;
+  the label was renamed to `vote-twice` rather than weakening the pattern.
 
 ## 12. Real cluster [decided]
 

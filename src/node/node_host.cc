@@ -58,7 +58,11 @@ void NodeHost::drain() {
   // first so a torn write can never keep entries from a term whose term
   // bump was lost.
   const bool log_changed = r.persist_from != Index{};
-  if (r.hard_state_dirty) ctx_.storage.set_hard_state(r.hard_state);
+  if (r.hard_state_dirty) {
+    HardState hs = r.hard_state;
+    if (core_.mutation_on(raft::Mutation::kNoVotePersist)) hs.voted_for = NodeId::none();
+    ctx_.storage.set_hard_state(hs);
+  }
   if (log_changed) ctx_.storage.append(core_.log().slice_all_from(r.persist_from));
   if (r.hard_state_dirty || log_changed) {
     ctx_.storage.sync();

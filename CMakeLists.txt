@@ -30,6 +30,7 @@ target_compile_definitions(raftdst_options INTERFACE
   $<$<BOOL:${RAFTDST_MUTANTS}>:RAFTDST_MUTANTS>)
 
 add_subdirectory(src)
+add_subdirectory(tools)
 
 if(RAFTDST_BUILD_TESTS)
   enable_testing()

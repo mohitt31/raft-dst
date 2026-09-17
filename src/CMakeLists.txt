@@ -38,6 +38,7 @@ target_link_libraries(raftdst_kv
 
 add_library(raftdst_harness STATIC
   harness/checker.cc
+  harness/fuzz_config.cc
   harness/scenario.cc
   harness/sim_cluster.cc
   harness/workload.cc)

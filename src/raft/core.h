@@ -15,12 +15,32 @@ namespace raftdst::raft {
 
 enum class Role : uint8_t { kFollower, kCandidate, kLeader };
 
+// Deliberate bugs, compiled only in the mutants preset. They exist to
+// measure whether the checker and fuzzer actually catch known Raft
+// mistakes. In every other build `Core::mutation_on` is a compile-time
+// false and the guarded branches are removed.
+enum class Mutation : uint8_t {
+  kNone,
+  kCommitOldTerm,            // commit earlier-term entries by counting replicas
+  kVoteWithoutLogCheck,      // grant votes to candidates with a stale log
+  kDoubleVote,               // grant a second vote in the same term
+  kTruncateOnStaleAppend,    // truncate at prev_index even without a conflict
+  kFollowerCommitUnbounded,  // trust the leader commit index past what was verified
+  kNoVotePersist,            // host: persist the term but not the vote
+};
+
+#ifdef RAFTDST_MUTANTS
+// Only the mutants build can name them; release has no trace of them.
+const char* mutation_name(Mutation m);
+#endif
+
 struct Config {
   Duration election_timeout_min = Duration::ms(150);
   Duration election_timeout_max = Duration::ms(300);  // exclusive
   Duration heartbeat_interval = Duration::ms(50);
   uint64_t max_entries_per_append = 256;
   size_t max_bytes_per_append = 1u << 20;
+  Mutation mutation = Mutation::kNone;
 };
 
 struct ProposeResult {
@@ -96,6 +116,15 @@ class Core {
 
   // Asserts every internal invariant. Runs after each input in DCHECK builds.
   void check_invariants() const;
+
+  [[nodiscard]] bool mutation_on(Mutation m) const {
+#ifdef RAFTDST_MUTANTS
+    return config_.mutation == m;
+#else
+    (void)m;
+    return false;
+#endif
+  }
 
  private:
   [[nodiscard]] uint8_t quorum() const { return static_cast<uint8_t>(n_ / 2 + 1); }

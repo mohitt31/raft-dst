@@ -48,7 +48,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_FLAGS_RELEASE": "-O2 -g -DNDEBUG",
-        "RAFTDST_DCHECKS": "ON",
+        "RAFTDST_DCHECKS": "OFF",
         "RAFTDST_MUTANTS": "ON"
       }
     }

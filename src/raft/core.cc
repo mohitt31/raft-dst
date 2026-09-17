@@ -6,6 +6,28 @@
 
 namespace raftdst::raft {
 
+#ifdef RAFTDST_MUTANTS
+const char* mutation_name(Mutation m) {
+  switch (m) {
+    case Mutation::kNone:
+      return "none";
+    case Mutation::kCommitOldTerm:
+      return "commit-old-term";
+    case Mutation::kVoteWithoutLogCheck:
+      return "vote-without-log-check";
+    case Mutation::kDoubleVote:
+      return "vote-twice";
+    case Mutation::kTruncateOnStaleAppend:
+      return "truncate-on-stale-append";
+    case Mutation::kFollowerCommitUnbounded:
+      return "follower-commit-unbounded";
+    case Mutation::kNoVotePersist:
+      return "no-vote-persist";
+  }
+  return "?";
+}
+#endif
+
 Core::Core(NodeId self, uint8_t cluster_size, const Config& config, Recovered state, uint64_t seed,
            Time now)
     : self_(self),
@@ -172,8 +194,10 @@ void Core::become_leader(Time now) {
 void Core::on_request_vote(Time now, const Message& m) {
   const bool log_ok = m.last_log_term > log_.last_term() || (m.last_log_term == log_.last_term() &&
                                                              m.last_log_index >= log_.last_index());
-  const bool grant =
-      m.term == term_ && log_ok && (voted_for_ == NodeId::none() || voted_for_ == m.from);
+  const bool log_ok_checked = log_ok || mutation_on(Mutation::kVoteWithoutLogCheck);
+  const bool vote_free =
+      voted_for_ == NodeId::none() || voted_for_ == m.from || mutation_on(Mutation::kDoubleVote);
+  const bool grant = m.term == term_ && log_ok_checked && vote_free;
   if (grant) {
     if (voted_for_ != m.from) {
       voted_for_ = m.from;
@@ -225,6 +249,10 @@ void Core::on_append_entries(Time now, const Message& m) {
   // only at the first real conflict, so a stale or duplicated append can
   // never remove entries a newer append already added.
   const uint64_t n = m.entries.size();
+  if (mutation_on(Mutation::kTruncateOnStaleAppend) && n > 0 && m.prev_index < log_.last_index() &&
+      m.prev_index >= commit_) {
+    log_.truncate_after(m.prev_index);
+  }
   uint64_t i = 0;
   for (; i < n; ++i) {
     const Index idx = m.prev_index + (i + 1);
@@ -244,7 +272,9 @@ void Core::on_append_entries(Time now, const Message& m) {
   }
 
   const Index last_new = m.prev_index + n;
-  commit_ = std::max(commit_, std::min(m.commit, last_new));
+  const Index verified =
+      mutation_on(Mutation::kFollowerCommitUnbounded) ? log_.last_index() : last_new;
+  commit_ = std::max(commit_, std::min(m.commit, verified));
   reply_append(m, true, last_new, Index{}, Term{});
 }
 
@@ -353,7 +383,10 @@ void Core::maybe_commit() {
   const Index candidate{match[quorum() - 1]};
   // Only entries from the current term are committed by counting replicas
   // (paper Figure 8); earlier ones commit indirectly.
-  if (candidate > commit_ && log_.term_at(candidate) == term_) commit_ = candidate;
+  if (candidate > commit_ &&
+      (log_.term_at(candidate) == term_ || mutation_on(Mutation::kCommitOldTerm))) {
+    commit_ = candidate;
+  }
 }
 
 void Core::mark_unstable(Index from) {
