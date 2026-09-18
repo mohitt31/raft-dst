@@ -35,6 +35,8 @@ raftdst_test(sim_election SOURCES sim/election_test.cc LIBS raftdst_harness)
 raftdst_test(unit_kv SOURCES unit/kv_test.cc LIBS raftdst_kv)
 raftdst_test(sim_replication SOURCES sim/replication_test.cc LIBS raftdst_harness)
 raftdst_test(sim_regression SOURCES sim/regression_test.cc LIBS raftdst_harness)
+raftdst_test(real_file_wal SOURCES real/file_wal_test.cc LIBS raftdst_real raftdst_sim)
+raftdst_test(real_cluster_loopback SOURCES real/cluster_loopback_test.cc LIBS raftdst_real)
 target_compile_definitions(sim_regression PRIVATE
   RAFTDST_REGRESSIONS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/regressions")
 

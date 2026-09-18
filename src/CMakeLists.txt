@@ -36,6 +36,15 @@ target_link_libraries(raftdst_kv
   PUBLIC raftdst_common
   PRIVATE raftdst_warnings)
 
+add_library(raftdst_real STATIC
+  real/client.cc
+  real/client_protocol.cc
+  real/file_wal.cc
+  real/node_server.cc)
+target_link_libraries(raftdst_real
+  PUBLIC raftdst_common raftdst_node raftdst_kv
+  PRIVATE raftdst_warnings)
+
 add_library(raftdst_harness STATIC
   harness/checker.cc
   harness/fuzz_config.cc

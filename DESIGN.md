@@ -548,6 +548,58 @@ exactly "leader is missing committed entry".
 The case is committed as `tests/regressions/checker-stale-leader-term.repro`,
 in both its original and reduced form.
 
+## 11b. Physical bindings [built]
+
+The same `NodeHost` now runs on real hardware. Only the three interfaces
+change.
+
+**`RealClock`** is `CLOCK_MONOTONIC`, and `wake_at` just records a deadline
+that the event loop turns into a poll timeout; nothing fires on its own.
+
+**`FileWal`** is append-only, one record per write batch:
+`[u32 len][u32 crc32c][u8 type][body]`. An entries record carries its first
+index, so the truncation point travels with the entries and can never land
+without them. `sync()` writes and then flushes the drive cache, which on
+macOS means `F_FULLFSYNC` (plain `fsync` only reaches the drive) and on Linux
+`fdatasync`. Recovery replays records and cuts the file at the first short or
+bad-CRC record: that is the torn tail. Tests: a differential run against
+`SimStorage` with the same operation script, every truncated prefix of a real
+file recovering to a state some record prefix produces, a corrupted byte
+being rejected, and random bytes never crashing the parser. Removing the CRC
+check makes the corruption test fail, so it is not decoration.
+
+**`NodeServer`** is one `poll()` loop per node, no locks, because nothing is
+shared between threads. Each node listens on one port and dials every peer,
+so a pair has two connections, one per direction, and a connection's first
+frame says whether it is a peer (and which) or a client. Send queues are
+capped; over the cap frames are dropped and counted, which Raft tolerates and
+which keeps memory bounded when a peer is slow. Client writes are held until
+their entry applies, and answered "lost" if another term's entry takes that
+index, which is the honest answer without client sessions. Reads are served
+from the local state machine and may be stale.
+
+**Rejected: epoll/kqueue.** With at most five peers and a handful of client
+connections, `poll`'s O(n) scan costs nothing and the same code runs on both
+platforms.
+
+### Two real bugs, and what caught them
+
+**A dangling pointer that release builds hid.** The loopback test hung for
+twelve minutes at 0% CPU. A stack sample showed a thread blocked in `read()`,
+which cannot happen on a non-blocking socket — so the descriptor was not the
+one the code thought it held. `poll_once` was keeping `Conn*` pointers across
+the dispatch loop, and `accept_new()` pushes onto the `inbound_` vector, which
+reallocates and invalidates them. Dispatch now goes through connection ids
+that are looked up again after every callback. Put back deliberately, ASan
+reports `heap-use-after-free` in 3 runs out of 8, while the release build only
+produced a rare hang. The networked tests therefore run under ASan in CI, not
+only in release.
+
+**A view that outlived its buffer.** ASan then reported a
+`container-overflow`: `Client::request` returned the response value as a view
+into its receive buffer and then erased from that buffer before returning, so
+the view pointed past the end. The client now owns the bytes it hands back.
+
 ## 12. Real cluster [decided]
 
 Three `raftd` processes on one bare-metal Linux box, each pinned to its own
