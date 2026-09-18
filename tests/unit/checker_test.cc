@@ -40,9 +40,9 @@ TEST(Checker, NormalHistoryIsClean) {
   c.on_recovered(t0, n0, {}, EntryLog{});
   c.on_hard_state_synced(t0, n0, {Term{1}, n0});
   c.on_became_leader(t0, n0, Term{1}, EntryLog{});
-  c.on_commit(t0, n0, Index{1}, Term{1}, p(7));
-  c.on_commit(t0, n1, Index{1}, Term{1}, p(7));  // same entry on another node
-  c.on_commit(t0, n1, Index{1}, Term{1}, p(7));  // re-applied after a restart
+  c.on_commit(t0, n0, Index{1}, Term{1}, Term{1}, p(7));
+  c.on_commit(t0, n1, Index{1}, Term{1}, Term{1}, p(7));  // same entry on another node
+  c.on_commit(t0, n1, Index{1}, Term{1}, Term{1}, p(7));  // re-applied after a restart
   c.on_hard_state_synced(t0, n0, {Term{2}, NodeId::none()});
   c.on_hard_state_synced(t0, n0, {Term{2}, n1});
   c.on_became_leader(t0, n1, Term{2}, log_of({{1, 7}}));
@@ -88,22 +88,22 @@ TEST(Checker, DurableTermWentBackwards) {
 
 TEST(Checker, DifferentEntriesCommittedAtOneIndex) {
   Checker c;
-  c.on_commit(t0, n0, Index{1}, Term{1}, p(1));
-  c.on_commit(t0, n1, Index{1}, Term{1}, p(2));  // same term, different payload
-  c.on_commit(t0, n2, Index{1}, Term{2}, p(1));  // different term
+  c.on_commit(t0, n0, Index{1}, Term{1}, Term{1}, p(1));
+  c.on_commit(t0, n1, Index{1}, Term{1}, Term{1}, p(2));  // same term, different payload
+  c.on_commit(t0, n2, Index{1}, Term{2}, Term{2}, p(1));  // different term
   EXPECT_EQ(c.violations().size(), 2u);
 }
 
 TEST(Checker, CommitThatSkipsAnIndex) {
   Checker c;
-  c.on_commit(t0, n0, Index{2}, Term{1}, p(1));
+  c.on_commit(t0, n0, Index{2}, Term{1}, Term{1}, p(1));
   EXPECT_FALSE(c.ok());
 }
 
 TEST(Checker, LeaderMissingACommittedEntry) {
   Checker c;
-  c.on_commit(t0, n0, Index{1}, Term{1}, p(1));
-  c.on_commit(t0, n0, Index{2}, Term{1}, p(2));
+  c.on_commit(t0, n0, Index{1}, Term{1}, Term{1}, p(1));
+  c.on_commit(t0, n0, Index{2}, Term{1}, Term{1}, p(2));
   c.on_became_leader(t0, n1, Term{2}, log_of({{1, 1}}));          // too short
   c.on_became_leader(t0, n2, Term{3}, log_of({{1, 1}, {1, 9}}));  // wrong payload
   ASSERT_EQ(c.violations().size(), 2u);
@@ -112,9 +112,9 @@ TEST(Checker, LeaderMissingACommittedEntry) {
 
 TEST(Checker, AppliedStateMustMatchReferenceModel) {
   Checker c;
-  c.on_commit(t0, n0, Index{1}, Term{1}, p(1));
-  c.on_commit(t0, n0, Index{2}, Term{1}, {});  // no-op
-  c.on_commit(t0, n0, Index{3}, Term{1}, p(2));
+  c.on_commit(t0, n0, Index{1}, Term{1}, Term{1}, p(1));
+  c.on_commit(t0, n0, Index{2}, Term{1}, Term{1}, {});  // no-op
+  c.on_commit(t0, n0, Index{3}, Term{1}, Term{1}, p(2));
   c.on_applied(t0, n0, Index{1}, digest_after_puts({1}));
   c.on_applied(t0, n0, Index{2}, digest_after_puts({1}));
   c.on_applied(t0, n0, Index{3}, digest_after_puts({1, 2}));
@@ -133,13 +133,30 @@ TEST(Checker, DeleteAndOverwriteInModel) {
   kv::encode_command({kv::Op::kPut, "x", "1"}, put_a);
   kv::encode_command({kv::Op::kPut, "x", "2"}, put_b);
   kv::encode_command({kv::Op::kDel, "x", ""}, del);
-  c.on_commit(t0, n0, Index{1}, Term{1}, put_a);
-  c.on_commit(t0, n0, Index{2}, Term{1}, put_b);
-  c.on_commit(t0, n0, Index{3}, Term{1}, del);
+  c.on_commit(t0, n0, Index{1}, Term{1}, Term{1}, put_a);
+  c.on_commit(t0, n0, Index{2}, Term{1}, Term{1}, put_b);
+  c.on_commit(t0, n0, Index{3}, Term{1}, Term{1}, del);
   c.on_applied(t0, n0, Index{1}, kv::pair_hash("x", "1"));
   c.on_applied(t0, n0, Index{2}, kv::pair_hash("x", "2"));
   c.on_applied(t0, n0, Index{3}, 0);
   EXPECT_TRUE(c.ok()) << c.violations().front();
+}
+
+// Regression: the fuzzer (seed 2974) reported a leader of term 23 as
+// "missing" an entry committed under term 24. A candidate whose votes were
+// granted before the cluster moved on can win a stale term late; leader
+// completeness only covers entries committed in earlier terms.
+TEST(Checker, StaleLeaderOfAnOlderTermNeedNotHoldLaterCommits) {
+  Checker c;
+  c.on_became_leader(t0, n0, Term{24}, log_of({{24, 1}}));
+  c.on_commit(t0, n0, Index{1}, Term{24}, Term{24}, p(1));
+  c.on_became_leader(t0, n1, Term{23}, EntryLog{});  // elected late in an older term
+  EXPECT_TRUE(c.ok()) << c.violations().front();
+
+  // A leader of a LATER term missing that entry is still a violation.
+  c.on_became_leader(t0, n2, Term{25}, EntryLog{});
+  ASSERT_FALSE(c.ok());
+  EXPECT_NE(c.violations()[0].find("missing committed entry 1"), std::string::npos);
 }
 
 }  // namespace

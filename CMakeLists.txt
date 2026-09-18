@@ -31,6 +31,7 @@ target_compile_definitions(raftdst_options INTERFACE
 
 add_subdirectory(src)
 add_subdirectory(tools)
+add_subdirectory(bench)
 
 if(RAFTDST_BUILD_TESTS)
   enable_testing()

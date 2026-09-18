@@ -65,21 +65,29 @@ void Checker::check_hard_state(Time now, NodeId node, const HardState& hs, const
 }
 
 void Checker::on_recovered(Time now, NodeId node, const HardState& hs, const EntryLog& log) {
+  if (listener_) listener_->on_recovered(now, node, hs, log);
   check_hard_state(now, node, hs, "on restart");
   if (!log.invariants_hold()) violation(now, at(now, node) + "recovered log is malformed");
 }
 
 void Checker::on_hard_state_synced(Time now, NodeId node, const HardState& hs) {
+  if (listener_) listener_->on_hard_state_synced(now, node, hs);
   check_hard_state(now, node, hs, "after sync");
 }
 
 void Checker::on_became_leader(Time now, NodeId node, Term term, const EntryLog& log) {
+  if (listener_) listener_->on_became_leader(now, node, term, log);
   auto [it, inserted] = leader_of_.try_emplace(term.get(), node);
   if (!inserted && it->second != node) {
     violation(now, at(now, node) + "second leader in term " + std::to_string(term.get()) +
                        " (first was n" + std::to_string(it->second.get()) + ")");
   }
   for (size_t i = 0; i < committed_.size(); ++i) {
+    // Leader completeness covers entries committed in EARLIER terms only. A
+    // candidate whose votes were granted before the cluster moved on can win
+    // a stale term after a later term has already committed entries; it can
+    // never get them replicated, so it is harmless and not a violation.
+    if (committed_[i].commit_term >= term) continue;
     const Index idx{i + 1};
     if (!log.has(idx) || log.term_at(idx) != committed_[i].term ||
         hash_of(log.payload_at(idx)) != committed_[i].payload_hash) {
@@ -90,13 +98,14 @@ void Checker::on_became_leader(Time now, NodeId node, Term term, const EntryLog&
   }
 }
 
-void Checker::on_commit(Time now, NodeId node, Index index, Term term,
+void Checker::on_commit(Time now, NodeId node, Index index, Term term, Term node_term,
                         std::span<const uint8_t> payload) {
+  if (listener_) listener_->on_commit(now, node, index, term, node_term, payload);
   ++commit_reports_;
   const uint64_t h = hash_of(payload);
   const uint64_t i = index.get();
   if (i == committed_.size() + 1) {
-    committed_.push_back({term, h, now});
+    committed_.push_back({term, node_term, h, now});
     apply_to_model(payload);
     return;
   }
@@ -107,7 +116,10 @@ void Checker::on_commit(Time now, NodeId node, Index index, Term term,
                        std::to_string(committed_.size() + 1));
     return;
   }
-  const Committed& c = committed_[i - 1];
+  Committed& c = committed_[i - 1];
+  // Every reporter's term bounds the commit term from above; keep the
+  // tightest bound we have seen.
+  if (node_term < c.commit_term) c.commit_term = node_term;
   if (c.term != term || c.payload_hash != h) {
     violation(now, at(now, node) + "committed a different entry at index " + std::to_string(i) +
                        " (term " + std::to_string(term.get()) + ", first committed with term " +
@@ -137,6 +149,7 @@ void Checker::apply_to_model(std::span<const uint8_t> payload) {
 }
 
 void Checker::on_applied(Time now, NodeId node, Index index, uint64_t digest) {
+  if (listener_) listener_->on_applied(now, node, index, digest);
   ++apply_reports_;
   const uint64_t i = index.get();
   if (i == 0 || i > model_digest_.size()) {

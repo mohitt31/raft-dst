@@ -1,0 +1,8 @@
+# Found by raft_fuzz on 2026-09-18. The checker reported a leader of term 23
+# as missing an entry committed under term 24: a candidate can win a stale
+# term late, and leader completeness only covers entries committed in
+# earlier terms. The engine was correct; the checker was not.
+# Unreduced case, as the fuzzer printed it:
+seed=2974 nodes=5 max_entries=148 elect_min_ms=224 elect_max_ms=335 heartbeat_ms=81 delay_min_us=1552 delay_max_us=12097 drop_ppm=213146 dup_ppm=90728 long_delay_ppm=147455 crashes=1 crash_in_sync_ppm=371343 crash_gap_min_ms=248 crash_gap_max_ms=3618 partitions=1 part_gap_min_ms=643 part_gap_max_ms=5091 wl_min_us=6111 wl_max_us=15216 keys=62 workload=1 fault_s=26 run_s=44
+# Reduced by raft_reduce to a 10 s run with one key:
+seed=2974 nodes=5 max_entries=148 elect_min_ms=224 elect_max_ms=335 heartbeat_ms=81 delay_min_us=1552 delay_max_us=12097 drop_ppm=213146 dup_ppm=90728 long_delay_ppm=147455 crashes=1 crash_in_sync_ppm=371343 crash_gap_min_ms=248 crash_gap_max_ms=3618 partitions=1 part_gap_min_ms=643 part_gap_max_ms=5091 wl_min_us=6111 wl_max_us=15216 keys=1 workload=1 fault_s=10 run_s=10

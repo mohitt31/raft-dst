@@ -88,7 +88,8 @@ void NodeHost::drain() {
   for (Index i = applied_.next(); i <= r.commit; i = i.next()) {
     const auto payload = core_.log().payload_at(i);
     if (observer_) {
-      observer_->on_commit(ctx_.clock.now(), ctx_.self, i, core_.log().term_at(i), payload);
+      observer_->on_commit(ctx_.clock.now(), ctx_.self, i, core_.log().term_at(i), core_.term(),
+                           payload);
     }
     sm_->apply(i, payload);
     applied_ = i;

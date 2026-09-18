@@ -34,15 +34,20 @@ class Checker final : public node::IObserver {
   void on_recovered(Time now, NodeId node, const HardState& hs, const EntryLog& log) override;
   void on_hard_state_synced(Time now, NodeId node, const HardState& hs) override;
   void on_became_leader(Time now, NodeId node, Term term, const EntryLog& log) override;
-  void on_commit(Time now, NodeId node, Index index, Term term,
+  void on_commit(Time now, NodeId node, Index index, Term entry_term, Term node_term,
                  std::span<const uint8_t> payload) override;
   void on_applied(Time now, NodeId node, Index index, uint64_t digest) override;
 
   // Record a violation found outside the observer hooks (e.g. liveness).
   void fail(Time now, std::string what);
 
+  // Everything the checker sees is also forwarded here. For debugging tools
+  // that need to watch a real run; nullptr in normal runs.
+  void set_listener(node::IObserver* listener) { listener_ = listener; }
+
   struct Committed {
-    Term term;
+    Term term;         // the term the entry was created in
+    Term commit_term;  // upper bound on the term it became committed in
     uint64_t payload_hash;
     Time first_committed_at;
   };
@@ -62,6 +67,7 @@ class Checker final : public node::IObserver {
   void violation(Time now, std::string what);
   void apply_to_model(std::span<const uint8_t> payload);
 
+  node::IObserver* listener_ = nullptr;
   std::vector<std::string> violations_;
   Time first_violation_at_ = Time::max();
   std::array<Term, kMaxNodes> durable_term_{};

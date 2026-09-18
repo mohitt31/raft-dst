@@ -480,25 +480,30 @@ release binary contains none of their strings, which is checked directly with
 
 The measured result (NUMBERS.md has the commands):
 
-| Planted bug | Found by fuzzing |
+| Planted bug | Seeds of fuzzing to find it |
 |---|---|
-| vote without the up-to-date log check | seed 1 |
-| a second vote in one term | seed 2 |
-| truncate at prev_index without a conflict | seed 1 |
-| persist the term but not the vote | seed 1 |
-| commit earlier-term entries by counting (Figure 8) | no |
-| follower commit not capped at what a message verified | no |
+| vote without the up-to-date log check | 1 |
+| a second vote in one term | 2 |
+| truncate at prev_index without a conflict | 1 |
+| persist the term but not the vote | 1 |
+| commit earlier-term entries by counting (Figure 8) | 194 |
+| follower commit not capped at what a message verified | 1561 |
 
-The last two are the interesting result, and the reason this preset exists.
-Both are real safety bugs, and random search does not reach them: the first
-needs a majority to hold an old-term entry while the new leader's no-op is
-missing from it, and the second needs a follower with a stale divergent tail
-to receive an append that matches further back than the leader's commit
-index. Each is caught instead by a targeted scenario driven directly against
-the Core, and the mutants test requires every planted bug to be caught by
-fuzzing **or** by its scenario, so an escape fails the build. When I first ran
-it, `follower-commit-unbounded` escaped both and the test failed, which is how
-the missing scenario was found.
+The spread across three orders of magnitude is the point. Four bugs die on
+the first or second seed. The other two need a specific shape of history:
+Figure 8 needs a majority holding an old-term entry while the new leader's
+no-op is missing from it, and the unbounded follower commit needs a follower
+with a stale divergent tail receiving an append that matches further back
+than the leader's commit index.
+
+So each of those two also gets a targeted scenario driven straight against
+the Core, which catches it in under a millisecond instead of minutes of
+search. The mutants test uses a 60-seed budget for speed and requires every
+planted bug to be caught by fuzzing **or** by its scenario, so an escape
+fails the build. When I first ran it, `follower-commit-unbounded` escaped both
+and the test failed: that is how the missing scenario was found. I had also
+written earlier that random search could not reach these two at all; the
+2000-seed measurements above corrected that.
 
 Two side findings:
 
@@ -509,6 +514,39 @@ Two side findings:
 * The determinism lint flagged the string literal `"double-vote"` as the
   banned type `double`. It matches inside string literals, which is blunt;
   the label was renamed to `vote-twice` rather than weakening the pattern.
+
+## 11a. The first defect the fuzzer found was in the checker [built]
+
+A 2700-seed campaign on the clean engine reported one failure, seed 2974:
+*"leader of term 23 is missing committed entry 661"*. The trace showed:
+
+    8303173392 n3 LEADER term=24 last=661 term@661=24
+    8336883893 n3 COMMIT index=661 term=24      (then n4, n1, n0: a majority)
+    8386270111 n2 LEADER term=23 last=661 term@661=23
+
+n2 won term **23** after term 24 had already committed entry 661. That is
+legal: n2 had started a term-23 election earlier and its votes were granted
+before those nodes moved to term 24, so it won a stale term late. Such a
+leader can never replicate anything, because every peer at term 24 rejects
+it and sends its own term back.
+
+Leader Completeness (paper section 5.4.3) says an entry committed in term T
+is present in the logs of leaders of terms **greater than T**. My checker
+ignored the term ordering and demanded every new leader hold every committed
+entry, so it was a false positive: the engine was right and the checker was
+wrong.
+
+**Fix.** `on_commit` now also reports the committing node's current term,
+which is an upper bound on the term the entry became committed in (the
+checker keeps the tightest bound it sees). A leader of term T is only
+required to hold entries whose commit term is below T. Using an upper bound
+can only exempt a leader that a perfect check would have examined, so the
+check can still be too weak but never raises a false alarm. All six planted
+bugs are still caught after the change, including the two whose symptom is
+exactly "leader is missing committed entry".
+
+The case is committed as `tests/regressions/checker-stale-leader-term.repro`,
+in both its original and reduced form.
 
 ## 12. Real cluster [decided]
 

@@ -26,7 +26,10 @@ class IObserver {
   // The node became leader of `term` (reported after its vote was synced).
   virtual void on_became_leader(Time now, NodeId node, Term term, const EntryLog& log) = 0;
   // Entry `index` is committed on `node` and is about to be applied.
-  virtual void on_commit(Time now, NodeId node, Index index, Term term,
+  // `entry_term` is the term the entry was created in; `node_term` is the
+  // reporting node's current term, which is an upper bound on the term of
+  // the leader under which the entry became committed.
+  virtual void on_commit(Time now, NodeId node, Index index, Term entry_term, Term node_term,
                          std::span<const uint8_t> payload) = 0;
   // Entry `index` was applied; `digest` is the state machine digest after it.
   virtual void on_applied(Time now, NodeId node, Index index, uint64_t digest) = 0;

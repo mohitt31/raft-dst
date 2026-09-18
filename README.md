@@ -1,16 +1,83 @@
 # raft-dst
 
-A Raft key-value store built to be tested by deterministic simulation.
+A Raft key-value store whose correctness is tested by deterministic
+simulation: one seed decides every message drop, delay, duplicate, network
+partition, crash and election timeout in a run, so a failure is a number you
+can replay exactly.
 
-The Raft engine does no I/O. The same engine runs inside a single-threaded
-simulator, where one seed controls every message drop, delay, crash and
-election timeout, and on a real cluster over TCP with a write-ahead log.
+## The idea
 
-Work in progress. No performance numbers are published yet; when they are,
-each one will be in [NUMBERS.md](NUMBERS.md) with the command that
-reproduces it.
+Distributed-systems bugs live in schedules you cannot reproduce. So the
+consensus engine here does no I/O at all. `raft::Core` is a state machine:
+you hand it a message, a timer expiry or a client proposal, and it hands back
+what to persist, what to send and what is now committed. It never reads a
+clock, opens a socket or writes a file.
 
-## Build
+Everything around it is an interface — `IClock`, `INetwork`, `IStorage` — with
+two implementations. In the simulator they are a single-threaded event loop
+over virtual time with a seeded generator behind every fault. On a real node
+they are `CLOCK_MONOTONIC`, TCP sockets and a write-ahead log. The Raft code
+does not know which one it is running on, and `NodeHost`, the loop that
+drives it, is shared by both.
+
+That buys three things:
+
+* **Reproducibility.** The same seed produces a byte-identical event trace,
+  in one process and across two processes (checked in the test suite,
+  because two runs in one process share a heap layout and would miss a
+  pointer value leaking into behaviour).
+* **Speed.** 13.6 simulated cluster-hours per wall-clock minute on an M4,
+  with 382,000 injected faults per second — a fault rate no real network
+  would ever produce. ([NUMBERS.md](NUMBERS.md) has the command.)
+* **Observability.** A checker sees every node at once and can verify the
+  safety properties continuously, as they happen.
+
+## What is checked, while the run is happening
+
+| Property | Meaning |
+|---|---|
+| Election safety | at most one leader per term |
+| Vote durability | a node never votes twice in one term, including across crashes |
+| Term durability | a node's persisted term never goes backwards |
+| State machine safety | every node commits the same entry at each index |
+| Leader completeness | a leader holds every entry committed in earlier terms |
+| Applied state | after applying index i, a node's key-value state matches a reference model that applied entries 1..i |
+| Liveness | once faults stop, a leader is agreed and new writes commit |
+
+The Core also asserts its own invariants after every input, but it never
+asserts on what a peer sent: a buggy peer must be reported, not allowed to
+abort the process observing it.
+
+## Does the testing actually work?
+
+A test suite that finds nothing proves nothing, so the `mutants` build
+compiles six known Raft bugs — committing earlier-term entries by counting
+replicas, voting without the up-to-date log check, voting twice in a term,
+truncating a follower's log without a conflict, trusting a leader's commit
+index past what a message verified, and persisting the term but not the vote.
+Each must be caught by the fuzzer or by a targeted scenario, and
+[NUMBERS.md](NUMBERS.md) records how many seeds each one takes. None of that
+code exists in any other build.
+
+The first defect the fuzzer found was in the checker itself: it reported a
+leader of an older term as missing a later commit, which Raft allows.
+[DESIGN.md](DESIGN.md) section 11a has the trace and the fix. Since that fix,
+a 2,999-seed campaign committing 23 million entries under 171 million
+injected faults has found nothing.
+
+## Layout
+
+    src/common/   strong types, seeded generators, byte codec, CRC-32C, log storage
+    src/env/      IClock, INetwork, IStorage, INode, IStateMachine
+    src/raft/     the consensus state machine and the wire format
+    src/kv/       the replicated key-value state machine
+    src/node/     NodeHost: persist, sync, send, apply
+    src/sim/      virtual time, simulated network and disk, fault injection, tracing
+    src/harness/  checker, workload, scenario runner, fuzz case configuration
+    tools/        raft_fuzz, raft_reduce
+    bench/        sim_bench, reproduce.sh
+
+## Build and test
 
 ```sh
 cmake --preset release && cmake --build --preset release && ctest --preset release
@@ -18,4 +85,19 @@ cmake --preset release && cmake --build --preset release && ctest --preset relea
 
 Presets: `release`, `asan` (AddressSanitizer + UBSan), `tsan`, `mutants`.
 
-Design notes are in [DESIGN.md](DESIGN.md).
+Fuzz it:
+
+```sh
+build/release/tools/raft_fuzz --seeds 1:1000
+build/release/tools/raft_reduce "<the case it printed>"
+```
+
+Every number in [NUMBERS.md](NUMBERS.md) is regenerated by
+`bench/reproduce.sh`. Numbers measured on a real cluster are not in yet.
+
+## Scope
+
+No log compaction or snapshots, no membership changes, no on-disk storage
+engine, at most five static nodes, no client sessions, and reads are served
+from the leader's local state, so they can be stale. Those are deliberate
+cuts; [DESIGN.md](DESIGN.md) says why for each.
