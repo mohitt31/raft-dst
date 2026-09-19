@@ -82,6 +82,24 @@ Bugs 1 and 5 are also caught by targeted scenarios in
 `tests/sim/mutants_test.cc`, in well under a millisecond each, which is why
 those scenarios exist alongside the random search.
 
+## Cross-platform determinism
+
+The same seeds must produce the same trace everywhere. Measured 2026-09-19:
+
+    build/release/tools/raft_fuzz --seeds 1:30 --fingerprints
+
+| Platform | Compiler | Standard library | Result |
+|---|---|---|---|
+| macOS 26.5, arm64 | Apple Clang 21.0.0 | libc++ | 29 fingerprints (the range is half-open) |
+| Ubuntu 24.04, aarch64 (container) | GCC 13.3.0 | libstdc++ | identical to the above |
+
+Both are arm64, so this shows independence from the OS, compiler and
+standard library. A cross-architecture comparison (arm64 vs x86-64) runs in
+CI and can be done by hand by comparing the fingerprints `bench/reproduce.sh`
+prints on two machines.
+
+All 123 tests also pass under GCC 13 on Ubuntu 24.04.
+
 ## Real cluster
 
 Not measured yet. Commit latency (p50/p99/p99.9 under fixed-rate load) and

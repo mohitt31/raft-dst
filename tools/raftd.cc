@@ -1,6 +1,6 @@
 // One Raft node over TCP.
 //
-//   raftd --id 0 --peers 127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002 \
+//   raftd --id 0 --peers 127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002
 //         --wal /var/tmp/raft0.wal
 #include <csignal>
 #include <cstdio>

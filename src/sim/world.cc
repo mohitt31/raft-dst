@@ -27,12 +27,12 @@ class World::Endpoint final : public INetwork {
 };
 
 struct World::Slot {
-  Slot(World& w, uint8_t id, uint8_t n, uint64_t torn_seed)
-      : clock(w, id),
-        net(w, id),
+  Slot(World& w, uint8_t node_id, uint8_t n, uint64_t torn_seed)
+      : clock(w, node_id),
+        net(w, node_id),
         storage(torn_seed),
-        ctx{NodeId{id}, n, 0, clock, net, storage},
-        id(id) {}
+        ctx{NodeId{node_id}, n, 0, clock, net, storage},
+        id(node_id) {}
 
   SimClock clock;
   Endpoint net;

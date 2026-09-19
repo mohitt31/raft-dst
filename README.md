@@ -22,10 +22,11 @@ drives it, is shared by both.
 
 That buys three things:
 
-* **Reproducibility.** The same seed produces a byte-identical event trace,
-  in one process and across two processes (checked in the test suite,
-  because two runs in one process share a heap layout and would miss a
-  pointer value leaking into behaviour).
+* **Reproducibility.** The same seed produces a byte-identical event trace:
+  in one process, across two processes (two runs in one process share a heap
+  layout and would miss a pointer value leaking into behaviour), and across
+  platforms — 29 seeds give identical fingerprints on macOS with Apple Clang
+  and libc++ and on Linux with GCC and libstdc++.
 * **Speed.** 13.6 simulated cluster-hours per wall-clock minute on an M4,
   with 382,000 injected faults per second — a fault rate no real network
   would ever produce. ([NUMBERS.md](NUMBERS.md) has the command.)

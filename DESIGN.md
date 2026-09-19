@@ -600,6 +600,38 @@ only in release.
 into its receive buffer and then erased from that buffer before returning, so
 the view pointed past the end. The client now owns the bytes it hands back.
 
+## 11c. Portability and CI [built]
+
+The engine is built and tested on Linux with gcc, not only on the Mac, and
+doing that before any cluster run found three things clang never complains
+about:
+
+* gcc's `-Wshadow` flags a constructor parameter that shadows a member;
+  clang does not. Renamed.
+* `-Wnull-dereference` fires inside libstdc++'s `<string>` at `-O2`. It is a
+  false positive in a system header, so that warning is now Clang-only
+  rather than dropped everywhere.
+* `-Wcomment` rejects a trailing backslash in a `//` usage example, because
+  it silently continues the comment onto the next line.
+
+With those fixed, all 123 tests pass under gcc 13 on Ubuntu 24.04.
+
+**Cross-platform determinism, measured.** The same 30 seeds produce
+byte-identical trace fingerprints on macOS (Apple Clang, libc++) and Linux
+(gcc 13, libstdc++):
+
+    build/release/tools/raft_fuzz --seeds 1:30 --fingerprints
+
+Both runs were arm64, so what this proves is independence from the operating
+system, compiler and standard library, not yet from the CPU architecture. The
+CI `compare-fingerprints` job closes that gap, because GitHub's macOS runners
+are arm64 and its Ubuntu runners are x86-64, and `bench/reproduce.sh` prints
+the same fingerprints so a run on any machine can be compared by eye.
+
+CI runs every preset on both platforms, a 400-seed fuzz sweep of fresh seeds
+on each push, the fingerprint comparison, and a formatting check. It has not
+run yet: nothing is pushed to a remote.
+
 ## 12. Real cluster [decided]
 
 Three `raftd` processes on one bare-metal Linux box, each pinned to its own

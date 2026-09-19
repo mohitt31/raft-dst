@@ -17,7 +17,10 @@ add_library(raftdst_warnings INTERFACE)
 target_compile_options(raftdst_warnings INTERFACE
   -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
   -Wold-style-cast -Wnon-virtual-dtor -Wcast-align -Wimplicit-fallthrough
-  -Woverloaded-virtual -Wnull-dereference
+  -Woverloaded-virtual
+  # -Wnull-dereference reports false positives inside libstdc++'s <string>
+  # under GCC at -O2, so it is Clang-only.
+  $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wnull-dereference>
   $<$<BOOL:${RAFTDST_WERROR}>:-Werror>)
 
 add_library(raftdst_test_warnings INTERFACE)

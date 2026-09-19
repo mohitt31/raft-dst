@@ -12,9 +12,10 @@ cd "$(dirname "$0")/.."
 SEEDS=100
 REPEATS=5
 MUTATION_SEEDS=2000
+CAMPAIGN_SEEDS=3000
 QUICK=0
 if [[ "${1:-}" == "--quick" ]]; then
-  QUICK=1; SEEDS=20; REPEATS=3; MUTATION_SEEDS=200
+  QUICK=1; SEEDS=20; REPEATS=3; MUTATION_SEEDS=200; CAMPAIGN_SEEDS=200
 fi
 
 if [[ $QUICK -eq 1 ]]; then
@@ -46,6 +47,14 @@ echo "=== fuzzer effectiveness: seeds to catch each planted bug ==="
 for m in 1 2 3 4 5 6; do
   build/mutants/tools/raft_fuzz --mutation "$m" --seeds "1:$MUTATION_SEEDS" || true
 done
+echo
+
+echo "=== fuzz campaign on the clean engine ==="
+build/release/tools/raft_fuzz --seeds "1:$CAMPAIGN_SEEDS" --keep-going
+echo
+
+echo "=== determinism fingerprints (compare these across machines) ==="
+build/release/tools/raft_fuzz --seeds 1:20 --fingerprints
 echo
 
 echo "=== real cluster ==="

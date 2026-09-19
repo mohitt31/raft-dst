@@ -28,6 +28,53 @@ jobs:
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
 
+  # A short sweep of fresh seeds on every push, beyond the fixed seeds the
+  # test suite uses.
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: cmake --preset release && cmake --build --preset release
+      - run: build/release/tools/raft_fuzz --seeds 1:400 --keep-going
+
+  # The same seed must give the same trace on every platform. macOS runners
+  # are arm64 and Ubuntu runners are x86-64, so this also covers a change of
+  # CPU architecture, endianness assumptions and standard library.
+  fingerprints:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+      - run: cmake --preset release && cmake --build --preset release
+      - run: build/release/tools/raft_fuzz --seeds 1:50 --fingerprints > fingerprints.txt
+      - run: cat fingerprints.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fingerprints-${{ matrix.os }}
+          path: fingerprints.txt
+
+  compare-fingerprints:
+    needs: fingerprints
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: fp }
+      - name: Traces must match across platforms
+        run: |
+          diff -u fp/fingerprints-macos-15/fingerprints.txt \
+                  fp/fingerprints-ubuntu-24.04/fingerprints.txt
+          echo "same seeds, same traces on arm64 macOS and x86-64 Linux"
+
   format:
     runs-on: ubuntu-24.04
     steps:

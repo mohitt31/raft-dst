@@ -6,6 +6,8 @@
 //   raft_fuzz --case "seed=7 nodes=5 ..."   replay one case
 //   raft_fuzz --mutation 3 --seeds 1:200    mutants build: how many seeds it
 //                                           takes to catch planted bug 3
+//   raft_fuzz --seeds 1:50 --fingerprints   one trace fingerprint per seed, to
+//                                           compare runs across platforms
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,6 +38,7 @@ int main(int argc, char** argv) {
   bool keep_going = false;
   const char* single = nullptr;
   uint8_t mutation = 0;
+  bool fingerprints = false;
 
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -48,6 +51,8 @@ int main(int argc, char** argv) {
       keep_going = true;
     } else if (std::strcmp(a, "--case") == 0 && i + 1 < argc) {
       single = argv[++i];
+    } else if (std::strcmp(a, "--fingerprints") == 0) {
+      fingerprints = true;
     } else if (std::strcmp(a, "--mutation") == 0 && i + 1 < argc) {
       mutation = static_cast<uint8_t>(std::strtoul(argv[++i], nullptr, 10));
     } else {
@@ -80,6 +85,11 @@ int main(int argc, char** argv) {
     auto scenario = c.to_scenario();
     scenario.raft.mutation = static_cast<raftdst::raft::Mutation>(mutation);
     const ScenarioResult r = raftdst::harness::run_scenario(scenario);
+    if (fingerprints) {
+      std::printf("%llu %016llx\n", static_cast<unsigned long long>(seed),
+                  static_cast<unsigned long long>(r.fingerprint));
+      continue;
+    }
     committed += r.committed_entries;
     acknowledged += r.workload.acknowledged;
     faults += r.sim.injected_faults();
@@ -100,6 +110,7 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(to - from));
     return 3;
   }
+  if (fingerprints) return 0;
   std::printf(
       "%llu seeds, %llu failures, %llu entries committed, %llu writes acknowledged, "
       "%llu faults injected\n",
